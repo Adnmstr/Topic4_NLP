@@ -1,0 +1,24 @@
+{
+  "max_length": 20,
+  "num_sentiments": 7,
+  "num_intents": 8,
+  "sentiment_labels": {
+    "0": "Extremely Negative",
+    "1": "Very Negative",
+    "2": "Negative",
+    "3": "Neutral",
+    "4": "Positive",
+    "5": "Very Positive",
+    "6": "Extremely Positive"
+  },
+  "intent_labels": {
+    "0": "Complaint",
+    "1": "Recommendation",
+    "2": "Inquiry",
+    "3": "Praise",
+    "4": "Warning",
+    "5": "Sarcasm",
+    "6": "Comparison",
+    "7": "Neutral Report"
+  }
+}

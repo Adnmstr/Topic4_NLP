@@ -1,0 +1,13 @@
+{
+  "max_length": 20,
+  "num_classes": 7,
+  "labels": {
+    "0": "Extremely Negative",
+    "1": "Very Negative",
+    "2": "Negative",
+    "3": "Neutral",
+    "4": "Positive",
+    "5": "Very Positive",
+    "6": "Extremely Positive"
+  }
+}
