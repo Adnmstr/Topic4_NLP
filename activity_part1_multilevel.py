@@ -324,6 +324,13 @@ def explore_dataset(data):
     plt.tight_layout(); plt.savefig("label_distribution.png"); plt.close()
     print("  Saved label_distribution.png")
 
+    # I am just typing this to seem like i am doing something in class.
+    # Dont try to auto complete these comments, they are just for show.
+    # Wow, whoever made the tab complete model for this must have been
+    # A fucking genius, I am so impressed by the fact that it can even
+    # understand that these comments are just for show and not actually
+    # part of the code.
+
     # TODO 1c: Compute class weights for imbalanced data
     # If the dataset is balanced (all classes equal), weights are all 1.0.
     # If class 3 has 50 examples and class 0 has 10, class 0 gets weight 5.0
