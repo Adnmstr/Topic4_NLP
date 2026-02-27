@@ -81,6 +81,7 @@ RUN THIS FILE:  python activity_part2_intent.py
 import sys
 import os
 import json
+import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -95,7 +96,7 @@ sys.path.insert(0, TOPIC4_PATH)
 try:
     from activity1_preprocessing import (
         Vocabulary, clean_text, tokenize,
-        pad_sequence, preprocess_dataset, preprocess_for_model
+        pad_sequence, preprocess_for_model
     )
     print("[OK] Imported preprocessing from Topic 4 Activity 1")
 except ImportError as e:
@@ -305,6 +306,16 @@ LR          = 0.001
 ALPHA       = 0.5    # Weight for sentiment loss; (1-ALPHA) for intent loss
                      # ��=0.7 prioritizes sentiment; ��=0.3 prioritizes intent
 TRAIN_SPLIT = 0.80
+SEED        = 42
+
+
+def set_seed(seed=SEED):
+    """Set random seeds for reproducible experiments."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 # =========================================================================
@@ -356,13 +367,68 @@ def explore_dataset(data):
         count = cooccurrence[i][dominant_sentiment]
         print(f"    Intent {i} ({INTENT_LABELS[i]}) -> Sentiment {dominant_sentiment} ({SENTIMENT_LABELS[dominant_sentiment]}) [{count} examples]")
 
-    # TODO 1d: Compute class weights for both tasks
-    # Use the same formula as Part 1:
-    #   weight_i = total / (num_classes * count_i)
+    # Weights are intentionally computed on TRAIN split later to avoid leakage.
+    return sentiment_counts, intent_counts
+
+
+def compute_class_weights_from_split(data):
+    """
+    Compute class weights from a single split only (train split in practice).
+    This avoids leaking validation label distribution into training.
+    """
+    sentiment_counts = Counter(s for _, s, _ in data)
+    intent_counts = Counter(i for _, _, i in data)
     total = len(data)
-    sent_weights   = torch.tensor([total / (NUM_SENTIMENTS * sentiment_counts.get(i, 1)) for i in range(NUM_SENTIMENTS)], dtype=torch.float)
-    intent_weights = torch.tensor([total / (NUM_INTENTS * intent_counts.get(i, 1)) for i in range(NUM_INTENTS)], dtype=torch.float)
+
+    def _weights(counts, n_classes):
+        vals = []
+        for i in range(n_classes):
+            c = counts.get(i, 0)
+            vals.append(0.0 if c == 0 else total / (n_classes * c))
+        return torch.tensor(vals, dtype=torch.float)
+
+    sent_weights = _weights(sentiment_counts, NUM_SENTIMENTS)
+    intent_weights = _weights(intent_counts, NUM_INTENTS)
     return sent_weights, intent_weights
+
+
+def stratified_split_multitask(data, train_split=TRAIN_SPLIT, seed=SEED):
+    """
+    Split data with intent-stratification and enforce label coverage where possible.
+    Ensures reproducibility and more stable validation metrics on small datasets.
+    """
+    by_intent = {i: [] for i in range(NUM_INTENTS)}
+    for row in data:
+        by_intent[row[2]].append(row)
+
+    rng = random.Random(seed)
+    train_data, val_data = [], []
+
+    for i in range(NUM_INTENTS):
+        group = list(by_intent[i])
+        rng.shuffle(group)
+        n = len(group)
+        n_train = int(n * train_split)
+        n_train = max(1, min(n_train, n - 1))
+        train_data.extend(group[:n_train])
+        val_data.extend(group[n_train:])
+
+    rng.shuffle(train_data)
+    rng.shuffle(val_data)
+
+    # Guarantee both splits contain all sentiment classes if possible.
+    # If not achieved due dataset constraints, keep deterministic fallback.
+    train_sent = {s for _, s, _ in train_data}
+    val_sent = {s for _, s, _ in val_data}
+    if len(train_sent) < NUM_SENTIMENTS or len(val_sent) < NUM_SENTIMENTS:
+        full = list(data)
+        rng = random.Random(seed)
+        rng.shuffle(full)
+        split = int(len(full) * train_split)
+        train_data = full[:split]
+        val_data = full[split:]
+
+    return train_data, val_data
 
 
 # =========================================================================
@@ -479,6 +545,7 @@ def load_dual_model(filepath, device="cpu"):
     checkpoint = torch.load(filepath, map_location=device, weights_only=False)
     model = DualHeadClassifier(**checkpoint["config"])
     model.load_state_dict(checkpoint["state_dict"])
+    model.to(device)
     model.eval()
     return model
 
@@ -552,6 +619,18 @@ def train_multitask(model, train_X, train_y_sent, train_y_intent,
     Returns:
         dict with per-epoch history for both tasks
     """
+    device = next(model.parameters()).device
+    train_X = train_X.to(device)
+    train_y_sent = train_y_sent.to(device)
+    train_y_intent = train_y_intent.to(device)
+    val_X = val_X.to(device)
+    val_y_sent = val_y_sent.to(device)
+    val_y_intent = val_y_intent.to(device)
+    if sent_weights is not None:
+        sent_weights = sent_weights.to(device)
+    if intent_weights is not None:
+        intent_weights = intent_weights.to(device)
+
     # TODO 4a: Define TWO separate CrossEntropyLoss functions
     # One for sentiment (using sent_weights) and one for intent (intent_weights)
     # HINT:
@@ -733,18 +812,20 @@ def evaluate_task(true_labels, pred_labels, label_dict, task_name):
 
 def evaluate_both_tasks(model, X, y_sent, y_intent, split_name="Validation"):
     """Evaluate the dual-head model on both tasks simultaneously."""
+    device = next(model.parameters()).device
+    X = X.to(device)
     model.eval()
     with torch.no_grad():
         sent_logits, intent_logits = model(X)
-        sent_preds   = sent_logits.argmax(dim=1).numpy()
-        intent_preds = intent_logits.argmax(dim=1).numpy()
+        sent_preds = sent_logits.argmax(dim=1).detach().cpu().numpy()
+        intent_preds = intent_logits.argmax(dim=1).detach().cpu().numpy()
 
     print(f"\n{'='*65}")
     print(f"  EVALUATION: {split_name}")
     print(f"{'='*65}")
 
-    evaluate_task(y_sent.numpy(),   sent_preds,   SENTIMENT_LABELS, "Sentiment")
-    evaluate_task(y_intent.numpy(), intent_preds, INTENT_LABELS,    "Intent")
+    evaluate_task(y_sent.detach().cpu().numpy(), sent_preds, SENTIMENT_LABELS, "Sentiment")
+    evaluate_task(y_intent.detach().cpu().numpy(), intent_preds, INTENT_LABELS, "Intent")
 
 
 # =========================================================================
@@ -767,8 +848,9 @@ def predict_joint(text, model, vocab, max_length=MAX_LENGTH):
                         sentiment_probs, intent_probs
     """
     model.eval()
+    device = next(model.parameters()).device
     with torch.no_grad():
-        tensor = preprocess_for_model(text, vocab, max_length)  # (1, max_length)
+        tensor = preprocess_for_model(text, vocab, max_length).to(device)  # (1, max_length)
 
         # TODO 7a: Run the forward pass and unpack both logits
         # HINT: sent_logits, intent_logits = model(tensor)
@@ -805,23 +887,23 @@ def predict_joint(text, model, vocab, max_length=MAX_LENGTH):
 # =========================================================================
 
 if __name__ == "__main__":
+    set_seed(SEED)
     print("=" * 65)
     print("  TOPIC 5 ��� PART 2: Intent Extraction (Multi-Task Learning)")
     print("=" * 65)
 
     # ������ 1. Explore dataset ���������������������������������������������������������������������������������������������������������������������������������������������������
-    sent_weights, intent_weights = explore_dataset(MULTI_TASK_DATA)
+    explore_dataset(MULTI_TASK_DATA)
 
     # ������ 2. Prepare data ������������������������������������������������������������������������������������������������������������������������������������������������������������
     print("\n" + "=" * 65)
     print("  STEP 2: Preparing Data")
     print("=" * 65)
 
-    import random
-    random.shuffle(MULTI_TASK_DATA)
-    split       = int(len(MULTI_TASK_DATA) * TRAIN_SPLIT)
-    train_data  = MULTI_TASK_DATA[:split]
-    val_data    = MULTI_TASK_DATA[split:]
+    train_data, val_data = stratified_split_multitask(
+        MULTI_TASK_DATA, train_split=TRAIN_SPLIT, seed=SEED
+    )
+    sent_weights, intent_weights = compute_class_weights_from_split(train_data)
 
     vocab = Vocabulary(min_freq=1)
     train_X, train_y_sent, train_y_intent = prepare_multitask_data(
@@ -848,6 +930,8 @@ if __name__ == "__main__":
         num_intents    = NUM_INTENTS,
         dropout        = DROPOUT,
     )
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
     print(f"\n  Model:\n{model}")
     total = sum(p.numel() for p in model.parameters())
     print(f"\n  Total parameters: {total:,}")
