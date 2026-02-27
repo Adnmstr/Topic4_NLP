@@ -6,7 +6,7 @@ ACTIVITY 4 — Part B: Frontend Web Application (Streamlit)
 """
 
 import streamlit as st
-from model_service import SentimentService
+from model_service import SentimentService, SUPPORTED_LANGUAGES, classify_translation_errors
 
 
 # =========================================================================
@@ -31,9 +31,9 @@ MODEL_OPTIONS = {
         "model_dir": "saved_model_multilevel",
         "enabled": True,
     },
-    "Multitask Model — saved_model_multitask [placeholder]": {
+    "Multitask (Sentiment + Intent) — saved_model_multitask": {
         "model_dir": "saved_model_multitask",
-        "enabled": False,  # placeholder for next class
+        "enabled": True,
     },
 }
 
@@ -160,47 +160,152 @@ with tab1:
 # =========================================================================
 # TAB 2 — TRANSLATION COMPARISON
 # =========================================================================
+
+EXAMPLE_REVIEWS = [
+    "(Select an example...)",
+    "This movie was absolutely wonderful and I loved every moment of it",
+    "The acting was terrible and the plot made no sense at all",
+    "A visually stunning masterpiece with breathtaking cinematography",
+    "I fell asleep halfway through this boring and predictable film",
+    "The director created a perfect blend of humor and drama",
+    "What a waste of time and money this awful movie turned out to be",
+    "An emotional rollercoaster that left me speechless and deeply moved",
+    "The special effects were cheap and the dialogue was painfully bad",
+    "One of the best films I have seen this year with outstanding performances",
+    "The story was confusing and the characters were completely unlikable",
+    "A heartwarming tale that reminds you why you love going to the movies",
+    "I expected much more from this highly anticipated sequel but it disappointed",
+]
+
 with tab2:
-    st.subheader("Compare Original vs. Translated")
+    st.subheader("Translation Comparison")
     st.caption(
-        "Paste a review and its round-trip translation (English → other language → English). "
-        "The model scores both and shows the prediction shift."
+        "Analyze how round-trip translation (English \u2192 target language \u2192 English) "
+        "affects the model's sentiment prediction. Select an example or type your own."
     )
 
-    col1, col2 = st.columns(2)
-    with col1:
-        original = st.text_area("Original (English)", height=120)
-    with col2:
-        translated = st.text_area("Round-trip Translation", height=120)
+    # ---- Example selector ----
+    example_choice = st.selectbox("Load an example review", EXAMPLE_REVIEWS)
 
-    if st.button("Compare", type="primary", disabled=not selected_enabled):
-        if not original.strip() or not translated.strip():
-            st.warning("Please enter both texts before comparing.")
-        else:
-            result = service.compare(original, translated)
+    # ---- Input mode ----
+    auto_tab, manual_tab = st.tabs(["Automatic Translation", "Manual Paste"])
 
-            left, right = st.columns(2)
-            with left:
-                st.markdown("### Original")
-                render_result(result["original"])
-            with right:
-                st.markdown("### Translated")
-                render_result(result["translated"])
+    # =========== AUTOMATIC TRANSLATION ===========
+    with auto_tab:
+        default_text = "" if example_choice == EXAMPLE_REVIEWS[0] else example_choice
+        auto_review = st.text_area(
+            "Movie Review (English)",
+            value=default_text,
+            height=120,
+            key="auto_review",
+        )
 
-            st.divider()
+        lang_col, btn_col = st.columns([2, 1])
+        with lang_col:
+            target_lang_name = st.selectbox(
+                "Target language",
+                options=list(SUPPORTED_LANGUAGES.keys()),
+                index=0,
+            )
+        with btn_col:
+            st.write("")  # spacer
+            translate_btn = st.button(
+                "Translate & Compare",
+                type="primary",
+                disabled=not selected_enabled,
+            )
 
-            if result["changed"]:
-                st.warning(f"Prediction CHANGED (delta: {result['delta']:+.3f})")
+        if translate_btn:
+            if not auto_review.strip():
+                st.warning("Please enter a review before translating.")
             else:
-                st.success(f"Prediction preserved (delta: {result['delta']:+.3f})")
+                target_code = SUPPORTED_LANGUAGES[target_lang_name]
+                with st.spinner(f"Translating via {target_lang_name}..."):
+                    result = service.analyze_with_translation(auto_review, target_code)
 
-            if result["lost_words"]:
-                st.write("**Words lost in translation:**", result["lost_words"])
-            if result["new_words"]:
-                st.write("**New words from translation:**", result["new_words"])
+                # Show translation chain
+                st.markdown(f"**Intermediate ({target_lang_name}):** {result['intermediate_text']}")
+                st.markdown(f"**Back to English:** {result['back_translated']}")
+                st.divider()
 
-    if not selected_enabled:
-        st.caption("This tab is disabled for the multitask placeholder model.")
+                # Side-by-side predictions
+                left, right = st.columns(2)
+                with left:
+                    st.markdown("### Original")
+                    render_result(result["original"])
+                with right:
+                    st.markdown("### Back-Translated")
+                    render_result(result["translated"])
+
+                st.divider()
+
+                # Delta summary
+                if result["changed"]:
+                    st.warning(f"Prediction CHANGED (delta: {result['delta']:+.3f})")
+                else:
+                    st.success(f"Prediction preserved (delta: {result['delta']:+.3f})")
+
+                if result["lost_words"]:
+                    st.write("**Words lost in translation:**", result["lost_words"])
+                if result["new_words"]:
+                    st.write("**New words from translation:**", result["new_words"])
+
+                # Error classification
+                st.divider()
+                st.markdown("### Error Classification")
+                severity_colors = {"high": "red", "medium": "orange", "low": "blue"}
+                for err in result["errors"]:
+                    color = severity_colors.get(err["severity"], "gray")
+                    st.markdown(
+                        f":{color}[**{err['type']}** ({err['severity']})] "
+                        f"— {err['description']}"
+                    )
+
+    # =========== MANUAL PASTE ===========
+    with manual_tab:
+        col1, col2 = st.columns(2)
+        with col1:
+            original = st.text_area("Original (English)", height=120, key="manual_orig")
+        with col2:
+            translated = st.text_area("Round-trip Translation", height=120, key="manual_trans")
+
+        if st.button("Compare", type="primary", disabled=not selected_enabled):
+            if not original.strip() or not translated.strip():
+                st.warning("Please enter both texts before comparing.")
+            else:
+                result = service.compare(original, translated)
+                errors = classify_translation_errors(result)
+
+                left, right = st.columns(2)
+                with left:
+                    st.markdown("### Original")
+                    render_result(result["original"])
+                with right:
+                    st.markdown("### Translated")
+                    render_result(result["translated"])
+
+                st.divider()
+
+                if result["changed"]:
+                    st.warning(f"Prediction CHANGED (delta: {result['delta']:+.3f})")
+                else:
+                    st.success(f"Prediction preserved (delta: {result['delta']:+.3f})")
+
+                if result["lost_words"]:
+                    st.write("**Words lost in translation:**", result["lost_words"])
+                if result["new_words"]:
+                    st.write("**New words from translation:**", result["new_words"])
+
+                # Error classification
+                st.divider()
+                st.markdown("### Error Classification")
+                severity_colors = {"high": "red", "medium": "orange", "low": "blue"}
+                for err in errors:
+                    color = severity_colors.get(err["severity"], "gray")
+                    st.markdown(
+                        f":{color}[**{err['type']}** ({err['severity']})] "
+                        f"— {err['description']}"
+                    )
 
 
 # =========================================================================

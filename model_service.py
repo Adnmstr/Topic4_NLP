@@ -6,12 +6,10 @@ ACTIVITY 4 — Part A: Backend Service Layer
 
 This backend supports multiple saved model folders.
 
-Supported now:
+Supported models:
   - Binary sentiment model (Topic 4)      -> saved_model/
   - Multi-level sentiment model (Topic 5) -> saved_model_multilevel/
-
-Planned next:
-  - Multi-task sentiment+intent model     -> saved_model_multitask/ (placeholder)
+  - Multi-task sentiment+intent model      -> saved_model_multitask/
 ============================================================================
 """
 
@@ -26,6 +24,7 @@ from activity1_preprocessing import (
 # These loaders must match how the checkpoints were saved.
 from activity2_model import load_model as load_binary_model
 from activity_part1_multilevel import load_model as load_multilevel_model, SENTIMENT_LABELS
+from activity_part2_intent import load_dual_model, INTENT_LABELS
 
 
 def _read_config(model_dir: str) -> dict:
@@ -91,11 +90,10 @@ class SentimentService:
             self.model = load_multilevel_model(model_path)
             self.num_classes = int(self.config.get("num_classes", 7))
         elif self.model_type == "multitask":
-            # Placeholder: next class
-            raise NotImplementedError(
-                "Multitask model is a placeholder right now. "
-                "Disable it in the Streamlit UI until saved_model_multitask exists."
-            )
+            self.model = load_dual_model(model_path)
+            self.num_sentiments = int(self.config.get("num_sentiments", 7))
+            self.num_intents = int(self.config.get("num_intents", 8))
+            self.intent_labels = INTENT_LABELS
         else:
             raise ValueError(f"Unknown model_type: {self.model_type}")
 
@@ -195,6 +193,56 @@ class SentimentService:
                 "known_count": known_count,
             }
 
+        # =========================
+        # Multitask model (sentiment + intent)
+        # =========================
+        if self.model_type == "multitask":
+            with torch.no_grad():
+                sentiment_logits, intent_logits = self.model(tensor)
+
+                # Sentiment
+                sentiment_probs = torch.softmax(sentiment_logits, dim=1).squeeze(0)
+                sentiment_id = int(sentiment_probs.argmax().item())
+                sentiment_conf = float(sentiment_probs[sentiment_id].item())
+                sentiment_label = SENTIMENT_LABELS.get(sentiment_id, f"Class {sentiment_id}")
+
+                k = int(sentiment_probs.numel())
+                expected = float((sentiment_probs * torch.arange(k)).sum().item())
+                score_scalar = expected / max(1, (k - 1))
+
+                sentiment_scores = {
+                    SENTIMENT_LABELS.get(i, f"Class {i}"): float(sentiment_probs[i].item())
+                    for i in range(k)
+                }
+
+                # Intent
+                intent_probs = torch.softmax(intent_logits, dim=1).squeeze(0)
+                intent_id = int(intent_probs.argmax().item())
+                intent_conf = float(intent_probs[intent_id].item())
+                intent_label = self.intent_labels.get(intent_id, f"Class {intent_id}")
+
+                intent_scores = {
+                    self.intent_labels.get(i, f"Class {i}"): float(intent_probs[i].item())
+                    for i in range(int(intent_probs.numel()))
+                }
+
+            return {
+                "model_type": "multitask",
+                "sentiment": sentiment_label,
+                "confidence": sentiment_conf,
+                "positive_score": score_scalar,
+                "negative_score": 1.0 - score_scalar,
+                "score_scalar": score_scalar,
+                "scores": sentiment_scores,
+                "intent": intent_label,
+                "intent_confidence": intent_conf,
+                "intent_scores": intent_scores,
+                "cleaned": cleaned,
+                "tokens": tokens,
+                "encoded": encoded[: self.max_length],
+                "known_count": known_count,
+            }
+
         raise RuntimeError(f"Unhandled model_type: {self.model_type}")
 
     # ------------------------------------------------------------------
@@ -222,6 +270,155 @@ class SentimentService:
             "new_words": new_words,
         }
 
+    # ------------------------------------------------------------------
+    # analyze_with_translation(text, target_lang) -> dict
+    # ------------------------------------------------------------------
+    def analyze_with_translation(self, text: str, target_lang: str = "es") -> dict:
+        """
+        Full pipeline: translate round-trip, compare, classify errors.
+        """
+        translation = translate_round_trip(text, target_lang)
+        comparison = self.compare(text, translation["back_translated"])
+        errors = classify_translation_errors(comparison)
+
+        return {
+            **comparison,
+            "intermediate_lang": translation["intermediate_lang"],
+            "intermediate_text": translation["intermediate_text"],
+            "back_translated": translation["back_translated"],
+            "errors": errors,
+        }
+
+
+# ------------------------------------------------------------------
+# Translation helpers
+# ------------------------------------------------------------------
+SUPPORTED_LANGUAGES = {
+    "Spanish": "es-ES",
+    "French": "fr-FR",
+    "German": "de-DE",
+    "Italian": "it-IT",
+    "Portuguese": "pt-PT",
+    "Japanese": "ja-JP",
+    "Chinese (Simplified)": "zh-CN",
+    "Korean": "ko-KR",
+    "Russian": "ru-RU",
+    "Arabic": "ar-SA",
+    "Hindi": "hi-IN",
+}
+
+
+def translate_round_trip(text: str, target_lang: str = "es-ES") -> dict:
+    """
+    Translate text English -> target language -> back to English.
+    Uses MyMemoryTranslator (free, no API key, 500 char limit).
+    """
+    from deep_translator import MyMemoryTranslator
+
+    # MyMemory enforces a 500-character limit per request
+    text = text[:500]
+
+    forward = MyMemoryTranslator(source="en-GB", target=target_lang)
+    intermediate = forward.translate(text)
+
+    backward = MyMemoryTranslator(source=target_lang, target="en-GB")
+    back_translated = backward.translate(intermediate)
+
+    return {
+        "intermediate_lang": target_lang,
+        "intermediate_text": intermediate,
+        "back_translated": back_translated,
+    }
+
+
+def classify_translation_errors(compare_result: dict) -> list:
+    """
+    Classify translation errors from a compare() result.
+    Returns a list of {"type", "description", "severity"} dicts.
+    """
+    errors = []
+    orig = compare_result["original"]
+    trans = compare_result["translated"]
+    lost = compare_result["lost_words"]
+    new = compare_result["new_words"]
+
+    orig_tokens = orig.get("tokens", [])
+    trans_tokens = trans.get("tokens", [])
+
+    # Omission: known words dropped
+    if lost:
+        sev = "high" if len(lost) > 3 else ("medium" if len(lost) > 1 else "low")
+        errors.append({
+            "type": "Omission",
+            "description": f"{len(lost)} word(s) lost: {', '.join(lost)}",
+            "severity": sev,
+        })
+
+    # Addition: new words introduced
+    if new:
+        sev = "medium" if len(new) > 2 else "low"
+        errors.append({
+            "type": "Addition",
+            "description": f"{len(new)} new word(s): {', '.join(new)}",
+            "severity": sev,
+        })
+
+    # Lexical substitution: tokens changed but total count similar
+    shared = set(orig_tokens) & set(trans_tokens)
+    only_orig = set(orig_tokens) - shared
+    only_trans = set(trans_tokens) - shared
+    if only_orig and only_trans and not lost and not new:
+        errors.append({
+            "type": "Lexical Substitution",
+            "description": (
+                f"Words swapped: {', '.join(sorted(only_orig))} "
+                f"-> {', '.join(sorted(only_trans))}"
+            ),
+            "severity": "low",
+        })
+
+    # Reordering: same tokens, different positions
+    if sorted(orig_tokens) == sorted(trans_tokens) and orig_tokens != trans_tokens:
+        errors.append({
+            "type": "Reordering",
+            "description": "Same words appear in a different order",
+            "severity": "low",
+        })
+
+    # Semantic drift: prediction label changed
+    if compare_result["changed"]:
+        errors.append({
+            "type": "Semantic Drift",
+            "description": (
+                f"Prediction changed: {orig['sentiment']} -> {trans['sentiment']} "
+                f"(delta: {compare_result['delta']:+.3f})"
+            ),
+            "severity": "high",
+        })
+
+    # Confidence shift: same label but notable delta
+    delta = abs(compare_result["delta"])
+    if not compare_result["changed"] and delta > 0.05:
+        sev = "medium" if delta > 0.15 else "low"
+        errors.append({
+            "type": "Confidence Shift",
+            "description": (
+                f"Same prediction ({orig['sentiment']}) but score shifted "
+                f"by {compare_result['delta']:+.3f}"
+            ),
+            "severity": sev,
+        })
+
+    # No errors detected
+    if not errors:
+        errors.append({
+            "type": "Preserved",
+            "description": "Translation preserved meaning with no detectable errors",
+            "severity": "low",
+        })
+
+    return errors
+
 
 if __name__ == "__main__":
     print("=" * 62)
@@ -240,5 +437,14 @@ if __name__ == "__main__":
         print(r2["model_type"], r2["sentiment"], r2["confidence"], r2["score_scalar"])
     except Exception as e:
         print("\n[Multilevel test skipped]", e)
+
+    try:
+        svc3 = SentimentService("saved_model_multitask")
+        r3 = svc3.predict("This movie was absolutely wonderful and I loved it")
+        print("\n[Test multitask]")
+        print(r3["model_type"], r3["sentiment"], r3["confidence"], r3["score_scalar"])
+        print("  Intent:", r3["intent"], r3["intent_confidence"])
+    except Exception as e:
+        print("\n[Multitask test skipped]", e)
 
     print("\n" + "=" * 62)
