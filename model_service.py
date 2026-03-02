@@ -7,9 +7,11 @@ ACTIVITY 4 — Part A: Backend Service Layer
 This backend supports multiple saved model folders.
 
 Supported models:
-  - Binary sentiment model (Topic 4)      -> saved_model/
-  - Multi-level sentiment model (Topic 5) -> saved_model_multilevel/
-  - Multi-task sentiment+intent model      -> saved_model_multitask/
+  - Binary sentiment model (Topic 4)       -> artifacts/models/binary/
+  - Multi-level sentiment model (Topic 5)  -> artifacts/models/multilevel/
+  - Multi-task sentiment+intent model      -> artifacts/models/multitask/
+
+Legacy folders (saved_model*) are still supported for backward compatibility.
 ============================================================================
 """
 
@@ -25,6 +27,14 @@ from activity1_preprocessing import (
 from activity2_model import load_model as load_binary_model
 from activity_part1_multilevel import load_model as load_multilevel_model, SENTIMENT_LABELS
 from activity_part2_intent import load_dual_model, INTENT_LABELS
+from project_paths import (
+    BINARY_MODEL_DIR,
+    MULTILEVEL_MODEL_DIR,
+    MULTITASK_MODEL_DIR,
+    LEGACY_BINARY_MODEL_DIR,
+    LEGACY_MULTILEVEL_MODEL_DIR,
+    LEGACY_MULTITASK_MODEL_DIR,
+)
 
 
 def _read_config(model_dir: str) -> dict:
@@ -59,30 +69,54 @@ def _infer_model_type(model_dir: str, config: dict) -> str:
     return "binary"
 
 
+def _resolve_model_dir(model_dir: str) -> str:
+    """
+    Resolve user-supplied model_dir to a real directory, preferring the
+    new artifacts layout while keeping legacy folder compatibility.
+    """
+    if os.path.isdir(model_dir):
+        return model_dir
+
+    aliases = {
+        "saved_model": (BINARY_MODEL_DIR, LEGACY_BINARY_MODEL_DIR),
+        "saved_model_multilevel": (MULTILEVEL_MODEL_DIR, LEGACY_MULTILEVEL_MODEL_DIR),
+        "saved_model_multitask": (MULTITASK_MODEL_DIR, LEGACY_MULTITASK_MODEL_DIR),
+        BINARY_MODEL_DIR: (BINARY_MODEL_DIR, LEGACY_BINARY_MODEL_DIR),
+        MULTILEVEL_MODEL_DIR: (MULTILEVEL_MODEL_DIR, LEGACY_MULTILEVEL_MODEL_DIR),
+        MULTITASK_MODEL_DIR: (MULTITASK_MODEL_DIR, LEGACY_MULTITASK_MODEL_DIR),
+    }
+
+    for candidate in aliases.get(model_dir, (model_dir,)):
+        if os.path.isdir(candidate):
+            return candidate
+
+    return model_dir
+
+
 class SentimentService:
     """
     Backend service: wraps a trained model and exposes prediction methods.
     Works for both binary and multilevel sentiment models.
     """
 
-    def __init__(self, model_dir: str = "saved_model"):
-        self.model_dir = model_dir
+    def __init__(self, model_dir: str = BINARY_MODEL_DIR):
+        self.model_dir = _resolve_model_dir(model_dir)
 
         # ---- Load artifacts ----
-        self.config = _read_config(model_dir)
+        self.config = _read_config(self.model_dir)
         self.max_length = int(self.config["max_length"])
 
-        vocab_path = os.path.join(model_dir, "vocab.json")
+        vocab_path = os.path.join(self.model_dir, "vocab.json")
         if not os.path.exists(vocab_path):
             raise FileNotFoundError(f"Missing vocab.json at: {vocab_path}")
         self.vocab = Vocabulary.load(vocab_path)
 
-        model_path = os.path.join(model_dir, "model.pt")
+        model_path = os.path.join(self.model_dir, "model.pt")
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"Missing model.pt at: {model_path}")
 
         # ---- Determine which loader to use ----
-        self.model_type = _infer_model_type(model_dir, self.config)
+        self.model_type = _infer_model_type(self.model_dir, self.config)
 
         if self.model_type == "binary":
             self.model = load_binary_model(model_path)
@@ -425,13 +459,13 @@ if __name__ == "__main__":
     print("  Backend Service — Self-Test")
     print("=" * 62)
 
-    svc = SentimentService("saved_model")
+    svc = SentimentService(BINARY_MODEL_DIR)
     r = svc.predict("This movie was absolutely wonderful and I loved it")
     print("\n[Test binary]")
     print(r["model_type"], r["sentiment"], r["confidence"], r["score_scalar"])
 
     try:
-        svc2 = SentimentService("saved_model_multilevel")
+        svc2 = SentimentService(MULTILEVEL_MODEL_DIR)
         r2 = svc2.predict("This movie was absolutely wonderful and I loved it")
         print("\n[Test multilevel]")
         print(r2["model_type"], r2["sentiment"], r2["confidence"], r2["score_scalar"])
@@ -439,7 +473,7 @@ if __name__ == "__main__":
         print("\n[Multilevel test skipped]", e)
 
     try:
-        svc3 = SentimentService("saved_model_multitask")
+        svc3 = SentimentService(MULTITASK_MODEL_DIR)
         r3 = svc3.predict("This movie was absolutely wonderful and I loved it")
         print("\n[Test multitask]")
         print(r3["model_type"], r3["sentiment"], r3["confidence"], r3["score_scalar"])

@@ -88,6 +88,11 @@ import torch.optim as optim
 import numpy as np
 import matplotlib.pyplot as plt
 from collections import Counter
+from project_paths import (
+    MULTITASK_MODEL_DIR,
+    MULTITASK_PLOTS_DIR,
+    ensure_dir,
+)
 
 # ������ Import preprocessing from Topic 4 ���������������������������������������������������������������������������������������������������������������
 TOPIC4_PATH = os.path.join(os.path.dirname(__file__), "..", "Topic4_NLP")
@@ -753,10 +758,12 @@ def plot_multitask_training(history):
     axes[1].set_title("Loss ��� Both Tasks"); axes[1].set_xlabel("Epoch")
     axes[1].legend(); axes[1].grid(alpha=0.3)
 
+    ensure_dir(MULTITASK_PLOTS_DIR)
+    curves_path = os.path.join(MULTITASK_PLOTS_DIR, "training_curves_multitask.png")
     plt.tight_layout()
-    plt.savefig("training_curves_multitask.png", dpi=120)
+    plt.savefig(curves_path, dpi=120)
     plt.close()
-    print("  Saved: training_curves_multitask.png")
+    print(f"  Saved: {curves_path}")
 
 
 # =========================================================================
@@ -966,10 +973,13 @@ if __name__ == "__main__":
     evaluate_both_tasks(model, val_X,   val_y_sent,   val_y_intent,   "Validation")
 
     # ������ 6. Save ������������������������������������������������������������������������������������������������������������������������������������������������������������������������������������
-    os.makedirs("saved_model_multitask", exist_ok=True)
-    save_dual_model(model, "saved_model_multitask/model.pt")
-    vocab.save("saved_model_multitask/vocab.json")
-    with open("saved_model_multitask/config.json", "w") as f:
+    ensure_dir(MULTITASK_MODEL_DIR)
+    model_path = os.path.join(MULTITASK_MODEL_DIR, "model.pt")
+    vocab_path = os.path.join(MULTITASK_MODEL_DIR, "vocab.json")
+    config_path = os.path.join(MULTITASK_MODEL_DIR, "config.json")
+    save_dual_model(model, model_path)
+    vocab.save(vocab_path)
+    with open(config_path, "w") as f:
         json.dump({
             "max_length": MAX_LENGTH,
             "num_sentiments": NUM_SENTIMENTS,

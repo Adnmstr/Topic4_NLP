@@ -29,8 +29,8 @@ BRIDGING THE GAP (Concept -> Algorithm -> Code -> Deployed App):
 
     FOR YOUR APP:
         This script produces two files:
-            saved_model/model.pt   — trained neural network weights
-            saved_model/vocab.json — vocabulary mapping words to IDs
+            artifacts/models/binary/model.pt   — trained neural network weights
+            artifacts/models/binary/vocab.json — vocabulary mapping words to IDs
         Activity 4's web app loads these to make predictions in real-time.
 
 WHAT YOU'LL IMPLEMENT:
@@ -39,7 +39,7 @@ WHAT YOU'LL IMPLEMENT:
     - Hyperparameter choices (learning rate, epochs, etc.)
 
 RUN THIS FILE: python activity3_train.py
-    Produces: saved_model/model.pt, saved_model/vocab.json, plots/
+    Produces: artifacts/models/binary/* and artifacts/plots/binary/*
 ============================================================================
 """
 
@@ -56,6 +56,7 @@ import matplotlib.pyplot as plt
 # Import YOUR modules from Activities 1 and 2
 from activity1_preprocessing import Vocabulary, preprocess_dataset
 from activity2_model import SentimentClassifier, save_model
+from project_paths import BINARY_MODEL_DIR, BINARY_PLOTS_DIR, ensure_dir
 
 torch.manual_seed(42)
 np.random.seed(42)
@@ -344,26 +345,29 @@ print(f"{'FINAL':>6} | {train_losses[-1]:>11.4f} {train_accs[-1]:>9.1%} | "
 # =========================================================================
 # These files are what Activity 4's web app loads.
 
-os.makedirs("saved_model", exist_ok=True)
-save_model(model, "saved_model/model.pt")
-vocab.save("saved_model/vocab.json")
+ensure_dir(BINARY_MODEL_DIR)
+model_path = os.path.join(BINARY_MODEL_DIR, "model.pt")
+vocab_path = os.path.join(BINARY_MODEL_DIR, "vocab.json")
+save_model(model, model_path)
+vocab.save(vocab_path)
 
 # Also save max_length so the app knows the expected input size
 import json
-with open("saved_model/config.json", "w") as f:
+config_path = os.path.join(BINARY_MODEL_DIR, "config.json")
+with open(config_path, "w") as f:
     json.dump({"max_length": MAX_LENGTH}, f)
 
-print(f"\nSaved to saved_model/:")
-print(f"  model.pt   — trained neural network ({sum(p.numel() for p in model.parameters()):,} params)")
-print(f"  vocab.json — vocabulary ({len(vocab)} words)")
-print(f"  config.json — inference config (max_length={MAX_LENGTH})")
+print(f"\nSaved to {BINARY_MODEL_DIR}:")
+print(f"  {model_path}   (trained neural network, {sum(p.numel() for p in model.parameters()):,} params)")
+print(f"  {vocab_path} (vocabulary, {len(vocab)} words)")
+print(f"  {config_path} (inference config, max_length={MAX_LENGTH})")
 
 
 # =========================================================================
 # STEP 5: PLOTS
 # =========================================================================
 
-os.makedirs("plots", exist_ok=True)
+ensure_dir(BINARY_PLOTS_DIR)
 
 # --- Training curves ---
 fig, axes = plt.subplots(1, 2, figsize=(14, 5))
@@ -381,8 +385,9 @@ axes[1].set_title('Training and Validation Accuracy')
 axes[1].legend(); axes[1].grid(True, alpha=0.3); axes[1].set_ylim(0, 1.05)
 
 plt.tight_layout()
-plt.savefig('plots/training_curves.png', dpi=150, bbox_inches='tight')
-print(f"\nPlot saved: plots/training_curves.png")
+training_plot_path = os.path.join(BINARY_PLOTS_DIR, "training_curves.png")
+plt.savefig(training_plot_path, dpi=150, bbox_inches='tight')
+print(f"\nPlot saved: {training_plot_path}")
 
 # --- Trained embeddings PCA ---
 try:
@@ -423,8 +428,9 @@ try:
                      'Positive and negative words should form separate clusters')
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig('plots/embeddings_pca.png', dpi=150, bbox_inches='tight')
-        print(f"Plot saved: plots/embeddings_pca.png")
+        pca_plot_path = os.path.join(BINARY_PLOTS_DIR, "embeddings_pca.png")
+        plt.savefig(pca_plot_path, dpi=150, bbox_inches='tight')
+        print(f"Plot saved: {pca_plot_path}")
 except ImportError:
     print("(sklearn not installed — skipping PCA plot)")
 
@@ -456,7 +462,7 @@ for text in test_texts:
 
 print("\n" + "=" * 65)
 print("  ACTIVITY 3 COMPLETE")
-print("  Model and vocabulary saved to saved_model/")
+print(f"  Model and vocabulary saved to {BINARY_MODEL_DIR}")
 print("  Next: Activity 4 — Build the web app and deploy it!")
 print("=" * 65)
 

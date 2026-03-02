@@ -7,6 +7,7 @@ ACTIVITY 4 — Part B: Frontend Web Application (Streamlit)
 
 import streamlit as st
 from model_service import SentimentService, SUPPORTED_LANGUAGES, classify_translation_errors
+from project_paths import BINARY_MODEL_DIR, MULTILEVEL_MODEL_DIR, MULTITASK_MODEL_DIR
 
 
 # =========================================================================
@@ -23,16 +24,16 @@ st.set_page_config(
 # MODEL SELECTION (Sidebar)
 # =========================================================================
 MODEL_OPTIONS = {
-    "Binary Sentiment (default) — saved_model": {
-        "model_dir": "saved_model",
+    "Binary Sentiment (default)": {
+        "model_dir": BINARY_MODEL_DIR,
         "enabled": True,
     },
-    "Multilevel Sentiment — saved_model_multilevel": {
-        "model_dir": "saved_model_multilevel",
+    "Multilevel Sentiment": {
+        "model_dir": MULTILEVEL_MODEL_DIR,
         "enabled": True,
     },
-    "Multitask (Sentiment + Intent) — saved_model_multitask": {
-        "model_dir": "saved_model_multitask",
+    "Multitask (Sentiment + Intent)": {
+        "model_dir": MULTITASK_MODEL_DIR,
         "enabled": True,
     },
 }

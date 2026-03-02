@@ -68,6 +68,11 @@ import matplotlib.pyplot as plt
 from collections import Counter
 
 from activity_part2_intent import NUM_SENTIMENTS
+from project_paths import (
+    MULTILEVEL_MODEL_DIR,
+    MULTILEVEL_PLOTS_DIR,
+    ensure_dir,
+)
 
 # ������ Import preprocessing from Topic 4 ���������������������������������������������������������������������������������������������������������������
 # We reuse the Vocabulary, clean_text, tokenize, pad_sequence, and
@@ -321,8 +326,10 @@ def explore_dataset(data):
     plt.bar(range(NUM_SENTIMENTS), labels_sorted)
     plt.xticks(range(NUM_SENTIMENTS), list(SENTIMENT_LABELS.values()), rotation=45)
     plt.title("Label Distribution")
-    plt.tight_layout(); plt.savefig("label_distribution.png"); plt.close()
-    print("  Saved label_distribution.png")
+    ensure_dir(MULTILEVEL_PLOTS_DIR)
+    label_plot_path = os.path.join(MULTILEVEL_PLOTS_DIR, "label_distribution.png")
+    plt.tight_layout(); plt.savefig(label_plot_path); plt.close()
+    print(f"  Saved {label_plot_path}")
 
     # I am just typing this to seem like i am doing something in class.
     # Dont try to auto complete these comments, they are just for show.
@@ -647,9 +654,11 @@ def plot_training(history):
     ax2.legend(); ax2.grid(alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("training_curves_multilevel.png", dpi=120)
+    ensure_dir(MULTILEVEL_PLOTS_DIR)
+    curves_path = os.path.join(MULTILEVEL_PLOTS_DIR, "training_curves_multilevel.png")
+    plt.savefig(curves_path, dpi=120)
     plt.close()
-    print("  Saved: training_curves_multilevel.png")
+    print(f"  Saved: {curves_path}")
 
 
 # =========================================================================
@@ -763,7 +772,9 @@ def evaluate(model, X, y, split_name="Validation"):
             ax.text(j, i, confusion[i,j], ha='center', va='center')
     plt.colorbar(im, ax=ax)
     plt.title("Confusion Matrix"); plt.tight_layout()
-    plt.savefig("confusion_matrix.png", dpi=120); plt.close()
+    ensure_dir(MULTILEVEL_PLOTS_DIR)
+    confusion_path = os.path.join(MULTILEVEL_PLOTS_DIR, "confusion_matrix.png")
+    plt.savefig(confusion_path, dpi=120); plt.close()
 
     return accuracy
 
@@ -887,13 +898,16 @@ if __name__ == "__main__":
     evaluate(model, val_X,   val_y,   "Validation")
 
     # ������ 6. Save model ������������������������������������������������������������������������������������������������������������������������������������������������������������������
-    os.makedirs("saved_model_multilevel", exist_ok=True)
-    save_model(model, "saved_model_multilevel/model.pt")
-    vocab.save("saved_model_multilevel/vocab.json")
-    with open("saved_model_multilevel/config.json", "w") as f:
+    ensure_dir(MULTILEVEL_MODEL_DIR)
+    model_path = os.path.join(MULTILEVEL_MODEL_DIR, "model.pt")
+    vocab_path = os.path.join(MULTILEVEL_MODEL_DIR, "vocab.json")
+    config_path = os.path.join(MULTILEVEL_MODEL_DIR, "config.json")
+    save_model(model, model_path)
+    vocab.save(vocab_path)
+    with open(config_path, "w") as f:
         json.dump({"max_length": MAX_LENGTH, "num_classes": NUM_CLASSES,
                    "labels": SENTIMENT_LABELS}, f, indent=2)
-    print("  Vocab saved ��� saved_model_multilevel/vocab.json")
+    print(f"  Vocab saved -> {vocab_path}")
 
     # ������ 7. Inference demo ������������������������������������������������������������������������������������������������������������������������������������������������������
     print("\n" + "=" * 65)
