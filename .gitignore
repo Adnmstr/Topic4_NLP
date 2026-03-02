@@ -10,4 +10,4 @@ venv/
 saved_model/
 saved_model_multilevel/
 saved_model_multitask/
-plots/
+/plots/
