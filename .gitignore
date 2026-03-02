@@ -6,12 +6,8 @@ __pycache__/
 .venv/
 venv/
 
-# Generated artifacts (new structure)
-artifacts/
-
 # Legacy generated outputs
 saved_model/
 saved_model_multilevel/
 saved_model_multitask/
 plots/
-*.png
